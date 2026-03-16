@@ -75,8 +75,12 @@
     <label for="apikey">Trafikverket API-nyckel (tåg)</label>
     <input type="text" id="apikey" placeholder="Nyckel från data.trafikverket.se">
     <div style="margin-top:0.8rem">
-      <label for="resrobotkey">Trafiklab Realtime API-nyckel (buss) – valfri</label>
-      <input type="text" id="resrobotkey" placeholder="Nyckel från trafiklab.se">
+      <label for="resrobotkey">Trafiklab Realtime-nyckel (buss realtid)</label>
+      <input type="text" id="resrobotkey" placeholder="Trafiklab Realtime API-nyckel">
+    </div>
+    <div style="margin-top:0.8rem">
+      <label for="resrobotaccess">ResRobot-nyckel (buss rutter)</label>
+      <input type="text" id="resrobotaccess" placeholder="ResRobot v2.1 API-nyckel">
     </div>
     <button class="btn" id="startBtn" disabled onclick="start()">Visa avgångar</button>
     <p class="hint">Gratis nycklar från <a href="https://data.trafikverket.se" target="_blank">Trafikverket</a> och <a href="https://www.trafiklab.se" target="_blank">Trafiklab</a></p>
@@ -106,7 +110,8 @@
 <script>
 const API = "https://api.trafikinfo.trafikverket.se/v2/data.json";
 const REALTIME_API = "https://realtime-api.trafiklab.se/v1";
-let apiKey = "", resrobotKey = "", interval = null;
+const RESROBOT_API = "https://api.resrobot.se/v2.1";
+let apiKey = "", resrobotKey = "", resrobotAccessId = "", interval = null;
 let fromSig = "", toSig = "";
 let activeTab = "trains";
 // Direction 1: Ängelholm → Helsingborg
@@ -122,13 +127,13 @@ const $ = id => document.getElementById(id);
 
 const saved = localStorage.getItem("tvApiKey");
 const savedRR = localStorage.getItem("rrApiKey");
+const savedRB = localStorage.getItem("rbApiKey");
 if (saved) {
   $("apikey").value = saved;
   $("startBtn").disabled = false;
 }
-if (savedRR) {
-  $("resrobotkey").value = savedRR;
-}
+if (savedRR) $("resrobotkey").value = savedRR;
+if (savedRB) $("resrobotaccess").value = savedRB;
 if (saved) start();
 
 $("apikey").addEventListener("input", e => {
@@ -138,6 +143,9 @@ $("apikey").addEventListener("keydown", e => {
   if (e.key === "Enter" && e.target.value.trim()) start();
 });
 $("resrobotkey").addEventListener("keydown", e => {
+  if (e.key === "Enter" && $("apikey").value.trim()) start();
+});
+$("resrobotaccess").addEventListener("keydown", e => {
   if (e.key === "Enter" && $("apikey").value.trim()) start();
 });
 
@@ -192,17 +200,20 @@ async function lookupStations() {
 async function start() {
   apiKey = $("apikey").value.trim();
   resrobotKey = $("resrobotkey").value.trim();
+  resrobotAccessId = $("resrobotaccess").value.trim();
   if (!apiKey) return;
   localStorage.setItem("tvApiKey", apiKey);
   if (resrobotKey) localStorage.setItem("rrApiKey", resrobotKey);
   else localStorage.removeItem("rrApiKey");
+  if (resrobotAccessId) localStorage.setItem("rbApiKey", resrobotAccessId);
+  else localStorage.removeItem("rbApiKey");
   $("login").style.display = "none";
   $("app").style.display = "block";
   $("content").innerHTML = '<div class="empty">Slår upp stationer...</div>';
 
   try {
     await lookupStations();
-    if (resrobotKey) {
+    if (resrobotKey && resrobotAccessId) {
       $("tabs").style.display = "flex";
     }
     await fetchAll();
@@ -229,8 +240,10 @@ function switchTab(tab) {
 async function fetchAll() {
   await fetchTrains();
   resrobotKey = $("resrobotkey").value.trim();
-  if (resrobotKey) {
+  resrobotAccessId = $("resrobotaccess").value.trim();
+  if (resrobotKey && resrobotAccessId) {
     localStorage.setItem("rrApiKey", resrobotKey);
+    localStorage.setItem("rbApiKey", resrobotAccessId);
     $("tabs").style.display = "flex";
     await fetchBuses();
   }
@@ -240,8 +253,10 @@ function logout() {
   clearInterval(interval);
   localStorage.removeItem("tvApiKey");
   localStorage.removeItem("rrApiKey");
+  localStorage.removeItem("rbApiKey");
   apiKey = "";
   resrobotKey = "";
+  resrobotAccessId = "";
   fromSig = "";
   toSig = "";
   depFromA = []; arrAtB = [];
@@ -253,6 +268,7 @@ function logout() {
   $("app").style.display = "none";
   $("apikey").value = "";
   $("resrobotkey").value = "";
+  $("resrobotaccess").value = "";
   $("startBtn").disabled = true;
   $("error").innerHTML = "";
   $("tabs").style.display = "none";
@@ -420,36 +436,69 @@ async function rtFetch(endpoint) {
   return res.json();
 }
 
+async function rrFetch(params) {
+  const url = new URL(`${RESROBOT_API}/trip`);
+  url.searchParams.set("accessId", resrobotAccessId);
+  url.searchParams.set("format", "json");
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`ResRobot ${res.status}: ${res.statusText}`);
+  return res.json();
+}
+
+function parseTrips(data) {
+  const trips = data.Trip || [];
+  return trips.map(trip => {
+    let legs = trip.LegList.Leg;
+    if (!Array.isArray(legs)) legs = [legs];
+    const leg = legs.find(l => l.type !== "WALK") || legs[0];
+    const prods = Array.isArray(leg.Product) ? leg.Product : [leg.Product].filter(Boolean);
+    return {
+      time: leg.Origin.time,
+      arrTime: leg.Destination.time,
+      line: prods[0]?.line || "",
+      name: prods[0]?.name || "",
+      direction: leg.direction || "",
+      cancelled: false,
+      delay: null,
+      is_realtime: false,
+      platform: null
+    };
+  }).filter(t => t.line);
+}
+
+function enrichWithRealtime(trips, departures) {
+  for (const trip of trips) {
+    const schedHH = trip.time.substring(0, 5);
+    const match = departures.find(d =>
+      d.route?.designation === trip.line &&
+      d.scheduled?.substring(11, 16) === schedHH
+    );
+    if (match) {
+      trip.delay = match.delay || 0;
+      trip.is_realtime = match.is_realtime || false;
+      trip.cancelled = match.canceled || false;
+      trip.platform = match.realtime_platform?.designation || match.scheduled_platform?.designation || null;
+    }
+  }
+  return trips;
+}
+
 async function fetchBuses() {
   if (!stortorgetStopId || !stationStopId) return;
   try {
-    // Get departures from both stops + arrivals at both stops
-    const [depStort, depStat, arrStat, arrStort] = await Promise.all([
+    // ResRobot for correct routes, Realtime API for delays
+    const [tripsToStat, tripsToStort, depsStort, depsStat] = await Promise.all([
+      rrFetch({ originId: stortorgetStopId, destId: stationStopId, numF: 5 }),
+      rrFetch({ originId: stationStopId, destId: stortorgetStopId, numF: 5 }),
       rtFetch(`departures/${stortorgetStopId}`),
-      rtFetch(`departures/${stationStopId}`),
-      rtFetch(`arrivals/${stationStopId}`),
-      rtFetch(`arrivals/${stortorgetStopId}`)
+      rtFetch(`departures/${stationStopId}`)
     ]);
 
-    // Stortorget → Station: departures from Stortorget that later arrive at Station
-    const arrStatMap = new Map((arrStat.arrivals || []).map(a => [a.trip.trip_id, a]));
-    busStortorgetToStation = (depStort.departures || [])
-      .filter(d => {
-        if (d.route.transport_mode !== "BUS") return false;
-        const arr = arrStatMap.get(d.trip.trip_id);
-        return arr && arr.scheduled > d.scheduled;
-      })
-      .slice(0, 5);
-
-    // Station → Stortorget: departures from Station that later arrive at Stortorget
-    const arrStortMap = new Map((arrStort.arrivals || []).map(a => [a.trip.trip_id, a]));
-    busStationToStortorget = (depStat.departures || [])
-      .filter(d => {
-        if (d.route.transport_mode !== "BUS") return false;
-        const arr = arrStortMap.get(d.trip.trip_id);
-        return arr && arr.scheduled > d.scheduled;
-      })
-      .slice(0, 5);
+    busStortorgetToStation = enrichWithRealtime(
+      parseTrips(tripsToStat), depsStort.departures || []);
+    busStationToStortorget = enrichWithRealtime(
+      parseTrips(tripsToStort), depsStat.departures || []);
 
     renderBuses();
   } catch (e) {
@@ -470,27 +519,26 @@ function renderBusTable(deps) {
   if (!deps.length) {
     return `<div class="empty">Inga kommande bussavgångar</div>`;
   }
-  let html = `<table><thead><tr><th>Avg.</th><th>Linje</th><th>Läge</th><th>Status</th></tr></thead><tbody>`;
+  let html = `<table><thead><tr><th>Avg.</th><th>Ank.</th><th>Linje</th><th>Läge</th><th>Status</th></tr></thead><tbody>`;
 
   for (const d of deps) {
-    const sched = new Date(d.scheduled);
-    const time = sched.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" });
-    const delay = Math.round((d.delay || 0) / 60);
-    const canceled = d.canceled;
-    const line = d.route?.designation || "";
-    const name = d.route?.name || "";
-    const platform = d.realtime_platform?.designation || d.scheduled_platform?.designation || "—";
+    const time = d.time.substring(0, 5);
+    const arrTime = d.arrTime ? d.arrTime.substring(0, 5) : "—";
+    const delay = d.delay !== null ? Math.round(d.delay / 60) : null;
+    const canceled = d.cancelled;
+    const platform = d.platform || "—";
 
     let rtTime = null;
-    if (delay !== 0 && d.realtime) {
-      const rt = new Date(d.realtime);
-      rtTime = rt.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" });
+    if (delay !== null && delay !== 0) {
+      const [h, m] = d.time.split(":").map(Number);
+      const totalMin = h * 60 + m + delay;
+      rtTime = `${String(Math.floor(totalMin / 60) % 24).padStart(2, "0")}:${String(totalMin % 60).padStart(2, "0")}`;
     }
 
     let statusClass = "status-ok", statusText = "I tid";
     if (canceled) { statusClass = "status-canceled"; statusText = "Inställt"; }
-    else if (delay > 0) { statusClass = "status-late"; statusText = `+${delay} min`; }
-    else if (delay < 0) { statusClass = "status-ok"; statusText = `${delay} min`; }
+    else if (delay !== null && delay > 0) { statusClass = "status-late"; statusText = `+${delay} min`; }
+    else if (delay !== null && delay < 0) { statusClass = "status-ok"; statusText = `${delay} min`; }
     else if (!d.is_realtime) { statusClass = "status-ok"; statusText = "Planerad"; }
 
     const rowClass = canceled ? "canceled-row" : "";
@@ -498,7 +546,8 @@ function renderBusTable(deps) {
 
     html += `<tr class="${rowClass}">
       <td><span class="time">${time}</span>${estHtml}</td>
-      <td><span class="bus-line">${line}</span> <span class="train-type">${name}</span></td>
+      <td><span class="time">${arrTime}</span></td>
+      <td><span class="bus-line">${d.line}</span> <span class="train-type">${d.name}</span></td>
       <td>${platform}</td>
       <td><span class="${statusClass}">${statusText}</span></td>
     </tr>`;

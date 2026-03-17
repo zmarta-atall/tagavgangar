@@ -361,7 +361,10 @@ async function fetchTrains() {
 function matchTrains(departures, arrivals) {
   const arrMap = {};
   for (const a of arrivals) arrMap[a.AdvertisedTrainIdent] = a;
-  const matched = departures.filter(t => t.AdvertisedTrainIdent in arrMap);
+  const matched = departures.filter(t => {
+    const arr = arrMap[t.AdvertisedTrainIdent];
+    return arr && arr.AdvertisedTimeAtLocation > t.AdvertisedTimeAtLocation;
+  });
   return { trains: matched.slice(0, 2), arrMap };
 }
 

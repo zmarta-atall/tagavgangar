@@ -492,8 +492,8 @@ async function fetchBuses() {
   try {
     // ResRobot for correct routes, Realtime API for delays
     const [tripsToStat, tripsToStort, depsStort, depsStat] = await Promise.all([
-      rrFetch({ originId: stortorgetStopId, destId: stationStopId, numF: 5 }),
-      rrFetch({ originId: stationStopId, destId: stortorgetStopId, numF: 5 }),
+      rrFetch({ originId: stortorgetStopId, destId: stationStopId, numF: 6 }),
+      rrFetch({ originId: stationStopId, destId: stortorgetStopId, numF: 6 }),
       rtFetch(`departures/${stortorgetStopId}`),
       rtFetch(`departures/${stationStopId}`)
     ]);
@@ -512,9 +512,9 @@ async function fetchBuses() {
 function renderBuses() {
   let html = "";
   html += `<div class="direction">🚌 Stortorget → Stationen</div>`;
-  html += renderBusTable(busStortorgetToStation);
+  html += renderBusTable(busStortorgetToStation.slice(0, 5));
   html += `<div class="direction">🚌 Stationen → Stortorget</div>`;
-  html += renderBusTable(busStationToStortorget);
+  html += renderBusTable(busStationToStortorget.slice(0, 5));
   $("busContent").innerHTML = html;
 }
 

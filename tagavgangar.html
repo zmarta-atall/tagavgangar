@@ -510,8 +510,8 @@ async function fetchBuses() {
     const rrTime = earlier.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" });
     const rrDate = earlier.toLocaleDateString("sv-SE"); // YYYY-MM-DD
     const [tripsToStat, tripsToStort, depsStort, depsStat] = await Promise.all([
-      rrFetch({ originId: stortorgetStopId, destId: stationStopId, numF: 10, time: rrTime, date: rrDate }),
-      rrFetch({ originId: stationStopId, destId: stortorgetStopId, numF: 10, time: rrTime, date: rrDate }),
+      rrFetch({ originId: stortorgetStopId, destId: stationStopId, numF: 6, time: rrTime, date: rrDate }),
+      rrFetch({ originId: stationStopId, destId: stortorgetStopId, numF: 6, time: rrTime, date: rrDate }),
       rtFetch(`departures/${stortorgetStopId}`),
       rtFetch(`departures/${stationStopId}`)
     ]);

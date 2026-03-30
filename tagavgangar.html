@@ -488,21 +488,38 @@ function enrichWithRealtime(trips, departures) {
   return trips;
 }
 
+function filterPastBuses(trips) {
+  const now = new Date();
+  const today = now.toLocaleDateString("sv-SE");
+  return trips.filter(t => {
+    const [h, m] = t.time.split(":").map(Number);
+    const delayMin = t.delay !== null ? Math.round(t.delay / 60) : 0;
+    const dep = new Date(`${today}T${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:00`);
+    dep.setMinutes(dep.getMinutes() + delayMin);
+    return dep > now;
+  });
+}
+
 async function fetchBuses() {
   if (!stortorgetStopId || !stationStopId) return;
   try {
     // ResRobot for correct routes, Realtime API for delays
+    // Fetch trips starting 15 min ago to catch delayed buses whose
+    // scheduled time has passed but haven't actually departed yet.
+    const earlier = new Date(Date.now() - 15 * 60000);
+    const rrTime = earlier.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" });
+    const rrDate = earlier.toLocaleDateString("sv-SE"); // YYYY-MM-DD
     const [tripsToStat, tripsToStort, depsStort, depsStat] = await Promise.all([
-      rrFetch({ originId: stortorgetStopId, destId: stationStopId, numF: 6 }),
-      rrFetch({ originId: stationStopId, destId: stortorgetStopId, numF: 6 }),
+      rrFetch({ originId: stortorgetStopId, destId: stationStopId, numF: 10, time: rrTime, date: rrDate }),
+      rrFetch({ originId: stationStopId, destId: stortorgetStopId, numF: 10, time: rrTime, date: rrDate }),
       rtFetch(`departures/${stortorgetStopId}`),
       rtFetch(`departures/${stationStopId}`)
     ]);
 
-    busStortorgetToStation = enrichWithRealtime(
-      parseTrips(tripsToStat), depsStort.departures || []);
-    busStationToStortorget = enrichWithRealtime(
-      parseTrips(tripsToStort), depsStat.departures || []);
+    busStortorgetToStation = filterPastBuses(enrichWithRealtime(
+      parseTrips(tripsToStat), depsStort.departures || []));
+    busStationToStortorget = filterPastBuses(enrichWithRealtime(
+      parseTrips(tripsToStort), depsStat.departures || []));
 
     renderBuses();
   } catch (e) {

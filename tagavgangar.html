@@ -279,13 +279,21 @@ function logout() {
   $("tabs").style.display = "none";
 }
 
+// Both queries look 45 min back so late trains stay listed after their
+// scheduled time passes; matchTrains drops departed/canceled ones.
+// Limits leave room for the past entries (the queries cover all
+// destinations from each station, and Helsingborg C is busy).
+function trainLookback() {
+  return new Date(Date.now() - 45 * 60000).toISOString();
+}
+
 function depQuery(stationSig) {
-  return `<QUERY objecttype="TrainAnnouncement" schemaversion="1.9" orderby="AdvertisedTimeAtLocation" limit="15">
+  return `<QUERY objecttype="TrainAnnouncement" schemaversion="1.9" orderby="AdvertisedTimeAtLocation" limit="40">
     <FILTER>
       <AND>
         <EQ name="LocationSignature" value="${stationSig}" />
         <EQ name="ActivityType" value="Avgang" />
-        <GT name="AdvertisedTimeAtLocation" value="${new Date().toISOString()}" />
+        <GT name="AdvertisedTimeAtLocation" value="${trainLookback()}" />
       </AND>
     </FILTER>
     <INCLUDE>AdvertisedTrainIdent</INCLUDE>
@@ -301,12 +309,12 @@ function depQuery(stationSig) {
 }
 
 function arrQuery(stationSig) {
-  return `<QUERY objecttype="TrainAnnouncement" schemaversion="1.9" orderby="AdvertisedTimeAtLocation" limit="50">
+  return `<QUERY objecttype="TrainAnnouncement" schemaversion="1.9" orderby="AdvertisedTimeAtLocation" limit="80">
     <FILTER>
       <AND>
         <EQ name="LocationSignature" value="${stationSig}" />
         <EQ name="ActivityType" value="Ankomst" />
-        <GT name="AdvertisedTimeAtLocation" value="${new Date().toISOString()}" />
+        <GT name="AdvertisedTimeAtLocation" value="${trainLookback()}" />
       </AND>
     </FILTER>
     <INCLUDE>AdvertisedTrainIdent</INCLUDE>
@@ -364,6 +372,11 @@ async function fetchTrains() {
 }
 
 function matchTrains(departures, arrivals) {
+  // Past-scheduled departures stay only while still expected: a late
+  // train is neither canceled nor has an actual departure time yet.
+  const now = new Date();
+  departures = departures.filter(t =>
+    new Date(t.AdvertisedTimeAtLocation) > now || (!t.Canceled && !t.TimeAtLocation));
   // Train numbers are reused later the same day, so keep all arrivals
   // per ident and pair each departure with the first arrival after it
   // (arrivals come time-ordered from the API).
@@ -422,6 +435,7 @@ function renderTable(trains, arrMap) {
     if (canceled) { statusClass = "status-canceled"; statusText = "Inställt"; }
     else if (delay > 0) { statusClass = "status-late"; statusText = `+${delay} min`; }
     else if (t.TimeAtLocation) { statusClass = "status-ok"; statusText = "Avgått"; }
+    else if (new Date(t.AdvertisedTimeAtLocation) < new Date()) { statusClass = "status-late"; statusText = "Försenad"; }
 
     const rowClass = canceled ? "canceled-row" : "";
     const estHtml = est && delay > 0 ? `<div class="est">→ ${est}</div>` : "";
@@ -516,9 +530,11 @@ async function fetchBuses() {
   if (!stortorgetStopId || !stationStopId) return;
   try {
     // ResRobot for correct routes, Realtime API for delays
-    // Fetch trips starting 15 min ago to catch delayed buses whose
+    // Fetch trips starting 30 min ago to catch delayed buses whose
     // scheduled time has passed but haven't actually departed yet.
-    const earlier = new Date(Date.now() - 15 * 60000);
+    // numF max 6 caps how far back we can afford to look — past trips
+    // consume result slots.
+    const earlier = new Date(Date.now() - 30 * 60000);
     const rrTime = earlier.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" });
     const rrDate = earlier.toLocaleDateString("sv-SE"); // YYYY-MM-DD
     const [tripsToStat, tripsToStort, depsStort, depsStat] = await Promise.all([

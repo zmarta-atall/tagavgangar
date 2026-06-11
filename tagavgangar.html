@@ -251,6 +251,7 @@ async function fetchAll() {
 }
 
 function logout() {
+  if (!confirm("Vill du verkligen byta nyckel? Sparade nycklar rensas.")) return;
   clearInterval(interval);
   localStorage.removeItem("tvApiKey");
   localStorage.removeItem("rrApiKey");

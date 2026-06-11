@@ -389,7 +389,7 @@ function matchTrains(departures, arrivals) {
     if (arr) arrMap[t.AdvertisedTrainIdent] = arr;
     return !!arr;
   });
-  return { trains: matched.slice(0, 2), arrMap };
+  return { trains: matched.slice(0, 3), arrMap };
 }
 
 function renderAll() {

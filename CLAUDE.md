@@ -20,7 +20,7 @@ The app combines three APIs:
 
 ## Key Functions
 
-- `matchTrains(departures, arrivals)` — pairs departures with arrivals, shows 2 per direction
+- `matchTrains(departures, arrivals)` — pairs departures with arrivals, shows 3 per direction
 - `fetchBuses()` → `parseTrips()` → `enrichWithRealtime()` — fetches 6 trips, displays 5 per direction
 - Auto-refreshes every 60 seconds via `setInterval`
 

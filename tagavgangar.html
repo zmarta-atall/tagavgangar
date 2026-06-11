@@ -526,22 +526,46 @@ function filterPastBuses(trips) {
   });
 }
 
+// How far back (minutes) ResRobot needs to look to include buses the
+// realtime board still reports as pending past their scheduled time.
+// 0 when nothing is delayed — numF max 6 means a standing lookback
+// lets already-departed pulse trips crowd out all upcoming ones.
+function busLookbackMin(departures) {
+  const now = Date.now();
+  let max = 0;
+  for (const d of departures || []) {
+    if (!d.scheduled || d.canceled) continue;
+    const sched = new Date(d.scheduled).getTime();
+    if (sched < now && sched + (d.delay || 0) * 1000 > now) {
+      max = Math.max(max, Math.ceil((now - sched) / 60000));
+    }
+  }
+  return max ? Math.min(max + 1, 30) : 0;
+}
+
 async function fetchBuses() {
   if (!stortorgetStopId || !stationStopId) return;
   try {
-    // ResRobot for correct routes, Realtime API for delays
-    // Fetch trips starting 30 min ago to catch delayed buses whose
-    // scheduled time has passed but haven't actually departed yet.
-    // numF max 6 caps how far back we can afford to look — past trips
-    // consume result slots.
-    const earlier = new Date(Date.now() - 30 * 60000);
-    const rrTime = earlier.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" });
-    const rrDate = earlier.toLocaleDateString("sv-SE"); // YYYY-MM-DD
-    const [tripsToStat, tripsToStort, depsStort, depsStat] = await Promise.all([
-      rrFetch({ originId: stortorgetStopId, destId: stationStopId, numF: 6, time: rrTime, date: rrDate }),
-      rrFetch({ originId: stationStopId, destId: stortorgetStopId, numF: 6, time: rrTime, date: rrDate }),
+    // ResRobot for correct routes, Realtime API for delays.
+    // Realtime boards first: they decide how far back each ResRobot
+    // trip query must start to cover still-pending delayed buses.
+    const [depsStort, depsStat] = await Promise.all([
       rtFetch(`departures/${stortorgetStopId}`),
       rtFetch(`departures/${stationStopId}`)
+    ]);
+    const rrParams = lookbackMin => {
+      const t = new Date(Date.now() - lookbackMin * 60000);
+      return {
+        numF: 6,
+        time: t.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" }),
+        date: t.toLocaleDateString("sv-SE") // YYYY-MM-DD
+      };
+    };
+    const [tripsToStat, tripsToStort] = await Promise.all([
+      rrFetch({ originId: stortorgetStopId, destId: stationStopId,
+                ...rrParams(busLookbackMin(depsStort.departures)) }),
+      rrFetch({ originId: stationStopId, destId: stortorgetStopId,
+                ...rrParams(busLookbackMin(depsStat.departures)) })
     ]);
 
     busStortorgetToStation = filterPastBuses(enrichWithRealtime(

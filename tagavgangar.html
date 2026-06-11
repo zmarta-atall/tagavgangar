@@ -265,6 +265,9 @@ function logout() {
   busStortorgetToStation = []; busStationToStortorget = [];
   stortorgetStopId = "740031349"; stationStopId = "740000064";
   activeTab = "trains";
+  $("content").style.display = "";
+  $("busContent").style.display = "none";
+  $("busContent").innerHTML = "";
   $("login").style.display = "flex";
   $("app").style.display = "none";
   $("apikey").value = "";
@@ -297,7 +300,7 @@ function depQuery(stationSig) {
 }
 
 function arrQuery(stationSig) {
-  return `<QUERY objecttype="TrainAnnouncement" schemaversion="1.9" limit="50">
+  return `<QUERY objecttype="TrainAnnouncement" schemaversion="1.9" orderby="AdvertisedTimeAtLocation" limit="50">
     <FILTER>
       <AND>
         <EQ name="LocationSignature" value="${stationSig}" />
@@ -360,11 +363,17 @@ async function fetchTrains() {
 }
 
 function matchTrains(departures, arrivals) {
+  // Train numbers are reused later the same day, so keep all arrivals
+  // per ident and pair each departure with the first arrival after it
+  // (arrivals come time-ordered from the API).
+  const arrByIdent = {};
+  for (const a of arrivals) (arrByIdent[a.AdvertisedTrainIdent] ||= []).push(a);
   const arrMap = {};
-  for (const a of arrivals) arrMap[a.AdvertisedTrainIdent] = a;
   const matched = departures.filter(t => {
-    const arr = arrMap[t.AdvertisedTrainIdent];
-    return arr && arr.AdvertisedTimeAtLocation > t.AdvertisedTimeAtLocation;
+    const arr = (arrByIdent[t.AdvertisedTrainIdent] || []).find(a =>
+      new Date(a.AdvertisedTimeAtLocation) > new Date(t.AdvertisedTimeAtLocation));
+    if (arr) arrMap[t.AdvertisedTrainIdent] = arr;
+    return !!arr;
   });
   return { trains: matched.slice(0, 2), arrMap };
 }
@@ -459,6 +468,7 @@ function parseTrips(data) {
     const prods = Array.isArray(leg.Product) ? leg.Product : [leg.Product].filter(Boolean);
     return {
       time: leg.Origin.time,
+      date: leg.Origin.date,
       arrTime: leg.Destination.time,
       line: prods[0]?.line || "",
       name: prods[0]?.name || "",
@@ -492,9 +502,10 @@ function filterPastBuses(trips) {
   const now = new Date();
   const today = now.toLocaleDateString("sv-SE");
   return trips.filter(t => {
-    const [h, m] = t.time.split(":").map(Number);
     const delayMin = t.delay !== null ? Math.round(t.delay / 60) : 0;
-    const dep = new Date(`${today}T${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:00`);
+    // Use the trip's own date — around midnight the 15 min lookback
+    // returns trips whose date differs from today's.
+    const dep = new Date(`${t.date || today}T${t.time}`);
     dep.setMinutes(dep.getMinutes() + delayMin);
     return dep > now;
   });
